@@ -301,7 +301,7 @@ if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     try:
         loop.run_until_complete(runner.setup())
-        site = web.TCPSite(runner, "localhost", 8080)
+        site = web.TCPSite(runner, "localhost", settings.PORT)
         loop.run_until_complete(
             asyncio.gather(bot.start(settings.DISCORD_BOT_TOKEN), site.start())
         )
