@@ -1,20 +1,36 @@
 import asyncio
 import json
 import logging
+import math
 from datetime import timedelta, timezone, datetime
 from itertools import zip_longest
-from typing import Any, Dict, Set
+from typing import Any, Dict, Set, Optional, List
 
+import discord
 import redis
 import requests
 from aiohttp import web
 from aiohttp.abc import BaseRequest
-from asgiref.sync import sync_to_async
+from dhooks import Embed
 from discord.ext import commands
 from dynaconf import settings
 from esipy import EsiApp, EsiClient, EsiSecurity
 from esipy.cache import RedisCache
 from loguru import logger
+
+millnames = ["", " k", " M", " B", " T"]
+
+
+def millify(n):
+    n = float(n)
+    millidx = max(
+        0,
+        min(
+            len(millnames) - 1, int(math.floor(0 if n == 0 else math.log10(abs(n)) / 3))
+        ),
+    )
+
+    return f"{n / 10 ** (3 * millidx):.1f}{millnames[millidx]}"
 
 
 class InterceptHandler(logging.Handler):
@@ -58,7 +74,7 @@ esiclient = EsiClient(
 routes = web.RouteTableDef()
 
 
-def process_page_contracts(contracts):
+async def process_page_contracts(contracts):
     contracts_of_interest = []
     for contract in contracts:
         if contract.date_expired.v < datetime.now(timezone.utc) + timedelta(hours=1):
@@ -76,19 +92,42 @@ def grouper(iterable, n, fillvalue=None):
     return zip_longest(*args, fillvalue=fillvalue)
 
 
-def get_contracts_for_region_id(region_id: int = 10000002) -> Dict[int, Any]:
-    op = esiapp.op["get_contracts_public_region_id"](region_id=region_id)
+async def get_contracts_for_region_id(
+    region_id: int = 10000002, page: Optional[int] = None
+) -> Dict[int, Any]:
+    max_pages = 1
+    max_value = redis_client.get(f"max_page_for_{region_id}")
+    if max_value is not None:
+        max_pages = json.loads(max_value)
+    if page is None:
+        page = 1
+        value = redis_client.get(f"last_page_for_{region_id}")
+        if value is not None:
+            page = json.loads(value)
+    if page > max_pages:
+        page = 1
+    redis_client.set(f"last_page_for_{region_id}", page, ex=1800)
+    op = esiapp.op["get_contracts_public_region_id"](region_id=region_id, page=page)
     response = esiclient.request(op)
-    pages = response.header["X-Pages"][0]
-    all_contracts = process_page_contracts(response.data)
-    ops = [
-        esiapp.op["get_contracts_public_region_id"](region_id=region_id, page=page)
-        for page in range(1, pages + 1)
-    ]
-    reqs_and_resps = esiclient.multi_request(ops)
-    for req, response in reqs_and_resps:
-        all_contracts.extend(process_page_contracts(response.data))
-    all_contracts = {x.contract_id: x for x in all_contracts}
+    max_pages = response.header["X-Pages"][0]
+    redis_client.set(f"max_page_for_{region_id}", max_pages, ex=3600)
+    all_contracts = await process_page_contracts(response.data)
+    # ops = [
+    #     esiapp.op["get_contracts_public_region_id"](region_id=region_id, page=page)
+    #     for page in range(1, max(max_pages + 1, 5))
+    # ]
+    # reqs_and_resps = esiclient.multi_request(ops)
+    # for req, response in reqs_and_resps:
+    #     all_contracts.extend(process_page_contracts(response.data))
+    all_contracts = {
+        x.contract_id: {
+            "price": x.price,
+            "value": 0.0,
+            "profit": 0.0,
+            "most_valuable": 0.0,
+        }
+        for x in all_contracts
+    }
     contracts_to_load = []
     for contract_id in all_contracts.keys():
         contract = redis_client.get(f"parsed_contract_{contract_id}")
@@ -101,10 +140,23 @@ def get_contracts_for_region_id(region_id: int = 10000002) -> Dict[int, Any]:
         for contract_id in contracts_to_load
     ]
     reqs_and_resps = esiclient.multi_request(ops)
+    type_ids = set()
+    for req, resp in reqs_and_resps:
+        for item in resp.data:
+            type_ids.add(item["type_id"])
+    item_prices = await get_prices_for_typeids(type_ids)
     for req, response in reqs_and_resps:
         contract_id = int(req._p["path"]["contract_id"])
         if response.data is not None and response.status == 200:
-            all_contracts[contract_id].items = response.data
+            all_contracts[contract_id].update(
+                await appraise_contract_items(response.data, item_prices)
+            )
+            all_contracts[contract_id].update(
+                {
+                    "profit": all_contracts[contract_id]["value"]
+                    - all_contracts[contract_id]["price"]
+                }
+            )
             redis_client.set(
                 f"parsed_contract_{contract_id}",
                 json.dumps(all_contracts[contract_id], default=str),
@@ -122,13 +174,22 @@ def get_contracts_for_region_id(region_id: int = 10000002) -> Dict[int, Any]:
     return all_contracts
 
 
-def get_prices_for_typeids(type_ids: Set[int]) -> Dict[int, Dict[str, Any]]:
+async def get_prices_for_typeids(type_ids: Set[int]) -> Dict[int, Dict[str, Any]]:
     ops = []
     price_lookup = {}
-    item_prices = {}
-
+    item_prices = redis_client.get("item_prices")
+    if item_prices is None:
+        logger.debug("Item prices not yet saved")
+        item_prices = {}
+    else:
+        logger.debug("Loaded cached item prices")
+        item_prices = json.loads(item_prices)
+        logger.debug(f"{[x for x in item_prices.keys()]}")
     for chunk in grouper(type_ids, 1000):
-        chunk = [x for x in chunk if x is not None]
+        chunk = [x for x in chunk if x is not None and str(x) not in item_prices.keys()]
+        logger.debug(chunk)
+        if not chunk:
+            return item_prices
         ops.append(esiapp.op["post_universe_names"](ids=chunk))
     reqs_and_resps = esiclient.multi_request(ops)
     for req, response in reqs_and_resps:
@@ -155,14 +216,35 @@ def get_prices_for_typeids(type_ids: Set[int]) -> Dict[int, Dict[str, Any]]:
             logger.warning(
                 "Response was {response.status}: {response.data}", response=response,
             )
+    logger.debug("Saving item prices")
+    redis_client.set("item_prices", json.dumps(item_prices), ex=86400)
     return item_prices
 
 
-def appraise_contracts():
-    contracts = get_contracts_for_region_id()
+async def appraise_contract_items(
+    items: List[Any], item_prices: Dict[int, Dict[str, Any]]
+) -> Dict[str, Any]:
+    most_valuable = ""
+    most_valuable_value = 0.0
+    value = 0.0
+    for item in items:
+        item_value = item_prices.get(item.get("type_id", 0), {}).get(
+            "price", 0.0
+        ) * item.get("quantity", 1)
+        if item["is_included"] is False:
+            item_value = -item_value
+        value += item_value
+        item_name = item_prices.get(item["type_id"], {}).get("name", "Unknown Item")
+        if item_value > most_valuable_value:
+            most_valuable = item_name
+            most_valuable_value = value
+    return {"value": value, "most_valuable": most_valuable}
+
+
+async def appraise_contracts(contracts: Dict[int, Any]) -> Dict[int, Any]:
     type_ids = set()
     for contract in contracts.values():
-        [type_ids.add(x["type_id"]) for x in contract["items"]]
+        [type_ids.add(x["type_id"]) for x in contract.get("items", [])]
     item_prices = get_prices_for_typeids(type_ids)
     for contract_id, contract in contracts.items():
         for item in contract.get("items", []):
@@ -234,12 +316,7 @@ async def contract(request: BaseRequest):
     if contract_id is None or user_id is None:
         return web.HTTPBadRequest(reason="Contract ID or User ID was not provided")
     refresh_token_for_user(user_id)
-    cache_key = f"parsed_contract_{contract_id}"
-    contract = redis_client.get(cache_key)
-    if contract is None:
-        return web.HTTPNotFound(reason="Contract with that ID was not found")
-    contract = json.loads(contract)
-    op = esiapp.op["post_ui_openwindow_contract"](contract_id=contract["contract_id"])
+    op = esiapp.op["post_ui_openwindow_contract"](contract_id=contract_id)
     response = esiclient.request(op)
     return web.Response(text="Contract opened in EVE")
 
@@ -271,26 +348,67 @@ async def login(ctx):
 
 @bot.command()
 async def top(ctx, region_name: str = "The Forge"):
-    refresh_token_for_user(ctx.author.id)
-    name = esisecurity.verify()["name"]
-    all_contracts = await sync_to_async(appraise_contracts)()
-    profits = sorted(
-        filter(
-            lambda x: all(
-                y.get("is_blueprint_copy", False) is False for y in x["items"]
+    try:
+        refresh_token_for_user(ctx.author.id)
+    except RuntimeError:
+        await ctx.author.send("You need to login first, use `$login`")
+        return
+    char_name = esisecurity.verify()["name"]
+    region_id = None
+    if len(region_name) >= 3:
+        response = esiclient.request(
+            esiapp.op["get_search"](
+                categories=["region"], search=region_name, strict=False
             )
-            and not any(["Blueprint" in y["name"] for y in x["items"]])
-            and x["profit"] > 100000000,
-            all_contracts.values(),
-        ),
-        key=lambda x: x["profit"],
-        reverse=True,
+        )
+        if response.status == 200 and response.data:
+            region_id = getattr(response.data, "region", None)
+            if region_id:
+                region_id = region_id[0]
+    region_name = None
+    if region_id is not None:
+        response = esiclient.request(
+            esiapp.op["get_universe_regions_region_id"](region_id=region_id)
+        )
+        if response.status == 200 and response.data:
+            region_name = getattr(response.data, "name", None)
+    all_contracts = await get_contracts_for_region_id(region_id=region_id)
+    profits = {
+        k: v
+        for k, v in sorted(
+            all_contracts.items(), key=lambda item: item[1]["profit"], reverse=True
+        )
+        if "Blueprint" not in v.get("most_valuable", "")
+        and "Container" not in v.get("most_valuable", "")
+    }
+    # profits = sorted(
+    #     filter(
+    #         lambda k, v: "Blueprint" not in v["most_valuable"]
+    #         and v["profit"] > 100000000,
+    #         all_contracts.items(),
+    #     ),
+    #     key=lambda x: x["profit"],
+    #     reverse=True,
+    # )
+    await ctx.author.send(f"Logged in as {char_name}")
+    embed = Embed(
+        description=f"Top 10 contracts in {region_name}",
+        color=0x03FC73,
+        timestamp="now",
     )
-    await ctx.author.send(f"Logged in as {name}")
-    text = ""
-    for contract in profits[:10]:
-        text = f"{text}{settings.BASE_URL}/contract?contract_id={contract['contract_id']}&user_id={ctx.author.id}\n"
-    await ctx.author.send(text)
+    embed.set_author(
+        name="Contract Appraisal Bot",
+        # icon_url="https://images.evetech.net/corporations/1003900783/logo?size=32",
+    )
+    # embed.set_thumbnail(url="https://images.evetech.net/types/597/render?size=64")
+    for contract_id, contract in {k: profits[k] for k in list(profits)[:10]}.items():
+        name = f"{contract.get('most_valuable', 'Unknwon Item')}" or "Unknown Item"
+        value = f"Price: {millify(contract['price'])} Profit: {millify(contract['profit'])} [link]({settings.BASE_URL}/contract?contract_id={contract_id}&user_id={ctx.author.id})"
+        embed.add_field(
+            name=name, value=value,
+        )
+    embed_dict = embed.to_dict()
+    await ctx.author.send(content="", embed=discord.Embed.from_dict(embed_dict))
 
 
 if __name__ == "__main__":
