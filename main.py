@@ -436,8 +436,9 @@ async def generate_embed(user_id, profits, region_id, offset: int = 0):
         embed.add_field(
             name=name, value=value,
         )
-    embed.set_footer(
-        text=f"[Next 10]({settings.BASE_URL}/next?region_id={region_id}&offset={offset + 10}&user_id={user_id})"
+    embed.add_field(
+        name="Next 10",
+        value=f"[Click for more]({settings.BASE_URL}/next?region_id={region_id}&offset={offset + 10}&user_id={user_id})",
     )
     embed_dict = embed.to_dict()
     return embed_dict
