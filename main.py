@@ -348,7 +348,7 @@ async def next_page(request: BaseRequest):
         user_id=user_id, profits=profits, region_id=region_id, offset=offset
     )
     user: User = bot.get_user(user_id)
-    await user.send(content="", embed=embed_dict)
+    await user.send(content="", embed=discord.Embed.from_dict(embed_dict))
     return web.Response(
         text="You'll receive a message on discord, please close this window."
     )
@@ -418,7 +418,10 @@ async def filter_contracts(region_id: int):
 async def generate_embed(user_id, profits, region_id, offset: int = 0):
     region_name = await get_region_name_for_id(region_id)
     embed = Embed(
-        description=f"Top 10 (of {len(profits)}) contracts in {region_name}",
+        description=(
+            f"{offset + 1} - {offset + 10} (of {len(profits)}) most profitable "
+            f"contracts in {region_name}"
+        ),
         color=0x03FC73,
         timestamp="now",
     )
