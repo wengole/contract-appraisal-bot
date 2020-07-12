@@ -112,13 +112,6 @@ async def get_contracts_for_region_id(
     max_pages = response.header["X-Pages"][0]
     redis_client.set(f"max_page_for_{region_id}", max_pages, ex=3600)
     all_contracts = await process_page_contracts(response.data)
-    # ops = [
-    #     esiapp.op["get_contracts_public_region_id"](region_id=region_id, page=page)
-    #     for page in range(1, max(max_pages + 1, 5))
-    # ]
-    # reqs_and_resps = esiclient.multi_request(ops)
-    # for req, response in reqs_and_resps:
-    #     all_contracts.extend(process_page_contracts(response.data))
     all_contracts = {
         x.contract_id: {
             "price": x.price,
@@ -381,15 +374,6 @@ async def top(ctx, region_name: str = "The Forge"):
         if "Blueprint" not in v.get("most_valuable", "")
         and "Container" not in v.get("most_valuable", "")
     }
-    # profits = sorted(
-    #     filter(
-    #         lambda k, v: "Blueprint" not in v["most_valuable"]
-    #         and v["profit"] > 100000000,
-    #         all_contracts.items(),
-    #     ),
-    #     key=lambda x: x["profit"],
-    #     reverse=True,
-    # )
     await ctx.author.send(f"Logged in as {char_name}")
     embed = Embed(
         description=f"Top 10 contracts in {region_name}",
@@ -403,7 +387,12 @@ async def top(ctx, region_name: str = "The Forge"):
     # embed.set_thumbnail(url="https://images.evetech.net/types/597/render?size=64")
     for contract_id, contract in {k: profits[k] for k in list(profits)[:10]}.items():
         name = f"{contract.get('most_valuable', 'Unknwon Item')}" or "Unknown Item"
-        value = f"Price: {millify(contract['price'])} Profit: {millify(contract['profit'])} [link]({settings.BASE_URL}/contract?contract_id={contract_id}&user_id={ctx.author.id})"
+        value = (
+            f"- Price: {millify(contract['price'])}\n"
+            f"- Value: {millify(contract['value'])}\n"
+            f"- Profit: {millify(contract['profit'])}\n"
+            f"[Open Contract in game]({settings.BASE_URL}/contract?contract_id={contract_id}&user_id={ctx.author.id})"
+        )
         embed.add_field(
             name=name, value=value,
         )
