@@ -386,7 +386,7 @@ async def top(ctx, region_name: str = "The Forge"):
     await get_region_name_for_id(region_id)
     profits = await filter_contracts(region_id)
     await ctx.author.send(f"Logged in as {char_name}")
-    embed_dict = await generate_embed(ctx, profits, region_id)
+    embed_dict = await generate_embed(ctx.author.id, profits, region_id)
     await loading_msg.delete()
     await ctx.author.send(content="", embed=discord.Embed.from_dict(embed_dict))
 
