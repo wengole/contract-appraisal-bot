@@ -12,6 +12,7 @@ import requests
 from aiohttp import web
 from aiohttp.abc import BaseRequest
 from dhooks import Embed
+from discord import Message, User
 from discord.ext import commands
 from dynaconf import settings
 from esipy import EsiApp, EsiClient, EsiSecurity
@@ -320,7 +321,7 @@ async def callback(request: BaseRequest):
     state = request.query.get("state")
     if code is None:
         return web.HTTPForbidden(reason="Token not found")
-    text = f"Hello, world {code}"
+    text = f"Your Discord user is now associated with the character you selected."
     tokens = esisecurity.auth(code)
     update_stored_tokens(
         discord_userid=state,
@@ -330,6 +331,27 @@ async def callback(request: BaseRequest):
         token_type="Bearer",
     )
     return web.Response(text=text)
+
+
+@routes.get("/next")
+async def next_page(request: BaseRequest):
+    region_id = request.query.get("region_id")
+    offset = request.query.get("offset")
+    user_id = request.query.get("user_id")
+    if region_id is None or offset is None or user_id is None:
+        return web.HTTPBadRequest(reason=f"One of region_id, user_id or offset missing")
+    region_id = int(region_id)
+    offset = int(offset)
+    user_id = int(user_id)
+    profits = await filter_contracts(region_id=region_id)
+    embed_dict = await generate_embed(
+        user_id=user_id, profits=profits, region_id=region_id, offset=offset
+    )
+    user: User = bot.get_user(user_id)
+    await user.send(content="", embed=embed_dict)
+    return web.Response(
+        text="You'll receive a message on discord, please close this window."
+    )
 
 
 @bot.command()
@@ -346,6 +368,9 @@ async def top(ctx, region_name: str = "The Forge"):
     except RuntimeError:
         await ctx.author.send("You need to login first, use `$login`")
         return
+    loading_msg: Message = await ctx.author.send(
+        "Loading contracts, this may take a couple of minutes..."
+    )
     char_name = esisecurity.verify()["name"]
     region_id = None
     if len(region_name) >= 3:
@@ -358,13 +383,26 @@ async def top(ctx, region_name: str = "The Forge"):
             region_id = getattr(response.data, "region", None)
             if region_id:
                 region_id = region_id[0]
-    region_name = None
-    if region_id is not None:
-        response = esiclient.request(
-            esiapp.op["get_universe_regions_region_id"](region_id=region_id)
-        )
-        if response.status == 200 and response.data:
-            region_name = getattr(response.data, "name", None)
+    await get_region_name_for_id(region_id)
+    profits = await filter_contracts(region_id)
+    await ctx.author.send(f"Logged in as {char_name}")
+    embed_dict = await generate_embed(ctx, profits, region_id)
+    await loading_msg.delete()
+    await ctx.author.send(content="", embed=discord.Embed.from_dict(embed_dict))
+
+
+async def get_region_name_for_id(region_id: int) -> Optional[str]:
+    if region_id is None:
+        return
+    response = esiclient.request(
+        esiapp.op["get_universe_regions_region_id"](region_id=region_id)
+    )
+    if response.status == 200 and response.data:
+        return getattr(response.data, "name", None)
+    return
+
+
+async def filter_contracts(region_id: int):
     all_contracts = await get_contracts_for_region_id(region_id=region_id)
     profits = {
         k: v
@@ -374,30 +412,35 @@ async def top(ctx, region_name: str = "The Forge"):
         if "Blueprint" not in v.get("most_valuable", "")
         and "Container" not in v.get("most_valuable", "")
     }
-    await ctx.author.send(f"Logged in as {char_name}")
+    return profits
+
+
+async def generate_embed(user_id, profits, region_id, offset: int = 0):
+    region_name = await get_region_name_for_id(region_id)
     embed = Embed(
-        description=f"Top 10 contracts in {region_name}",
+        description=f"Top 10 (of {len(profits)}) contracts in {region_name}",
         color=0x03FC73,
         timestamp="now",
     )
-    embed.set_author(
-        name="Contract Appraisal Bot",
-        # icon_url="https://images.evetech.net/corporations/1003900783/logo?size=32",
-    )
-    # embed.set_thumbnail(url="https://images.evetech.net/types/597/render?size=64")
-    for contract_id, contract in {k: profits[k] for k in list(profits)[:10]}.items():
-        name = f"{contract.get('most_valuable', 'Unknwon Item')}" or "Unknown Item"
+    embed.set_author(name="Contract Appraisal Bot",)
+    for contract_id, contract in {
+        k: profits[k] for k in list(profits)[offset : offset + 10]
+    }.items():
+        name = f"{contract.get('most_valuable', 'Unknown Item')}" or "Unknown Item"
         value = (
             f"- Price: {millify(contract['price'])}\n"
             f"- Value: {millify(contract['value'])}\n"
             f"- Profit: {millify(contract['profit'])}\n"
-            f"[Open Contract in game]({settings.BASE_URL}/contract?contract_id={contract_id}&user_id={ctx.author.id})"
+            f"[Open Contract in game]({settings.BASE_URL}/contract?contract_id={contract_id}&user_id={user_id})"
         )
         embed.add_field(
             name=name, value=value,
         )
+    embed.set_footer(
+        text=f"[Next 10]({settings.BASE_URL}/next?region_id={region_id}&offset={offset + 10}&user_id={user_id})"
+    )
     embed_dict = embed.to_dict()
-    await ctx.author.send(content="", embed=discord.Embed.from_dict(embed_dict))
+    return embed_dict
 
 
 if __name__ == "__main__":
