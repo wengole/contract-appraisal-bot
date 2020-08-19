@@ -107,11 +107,11 @@ async def get_contracts_for_region_id(
             page = json.loads(value)
     if page > max_pages:
         page = 1
-    redis_client.set(f"last_page_for_{region_id}", page, ex=1800)
+    redis_client.set(f"last_page_for_{region_id}", page, ex=settings.CACHE.pages)
     op = esiapp.op["get_contracts_public_region_id"](region_id=region_id, page=page)
     response = esiclient.request(op)
     max_pages = response.header["X-Pages"][0]
-    redis_client.set(f"max_page_for_{region_id}", max_pages, ex=3600)
+    redis_client.set(f"max_page_for_{region_id}", max_pages, ex=settings.CACHE.pages)
     all_contracts = await process_page_contracts(response.data)
     all_contracts = {
         x.contract_id: {
@@ -154,6 +154,7 @@ async def get_contracts_for_region_id(
             redis_client.set(
                 f"parsed_contract_{contract_id}",
                 json.dumps(all_contracts[contract_id], default=str),
+                ex=settings.CACHE.contract,
             )
         elif response.data is None:
             logger.warning("No response data for {}", contract_id)
@@ -211,7 +212,7 @@ async def get_prices_for_typeids(type_ids: Set[int]) -> Dict[int, Dict[str, Any]
                 "Response was {response.status}: {response.data}", response=response,
             )
     logger.debug("Saving item prices")
-    redis_client.set("item_prices", json.dumps(item_prices), ex=86400)
+    redis_client.set("item_prices", json.dumps(item_prices), ex=settings.CACHE.prices)
     return item_prices
 
 
@@ -253,7 +254,9 @@ async def appraise_contracts(contracts: Dict[int, Any]) -> Dict[int, Any]:
         contract["value"] = sum([x["value"] for x in contract.get("items", []) if x])
         contract["profit"] = contract["value"] - contract["price"]
         redis_client.set(
-            f"parsed_contract_{contract_id}", json.dumps(contract, default=str)
+            f"parsed_contract_{contract_id}",
+            json.dumps(contract, default=str),
+            ex=settings.CACHE.contract,
         )
     return contracts
 
