@@ -7,6 +7,7 @@ ESI_SECRET_KEY =""
 ESI_USER_AGENT ="ContractAppraisalBot"
 DISCORD_BOT_TOKEN=""
 PORT=8082
+PER_PAGE=25
 
 [default.cache]
 pages=1800
