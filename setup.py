@@ -1,7 +1,7 @@
 from setuptools import setup
 
 install_requires = [
-    "aiohttp==3.7.4",
+    "aiohttp>=3.6.0",
     "discord.py==1.3.3",
     "EsiPy==1.0.0",
     "dynaconf==2.2.3",
