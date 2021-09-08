@@ -444,14 +444,14 @@ async def generate_embed(
             f" * Price: {millify(contract.price)}\n"
             f" * Value: {millify(contract.value)}\n"
             f" * Profit: {millify(contract.profit)} ({contract.profit_percent:.2f}%)\n"
-            f"[Open Contract in game]({settings.BASE_URL}/contract?contract_id={contract_id}&user_id={user_id}&min_profit_percent={min_profit_percent})"
+            f"[Open Contract in game]({settings.BASE_URL}/contract?contract_id={contract_id}&user_id={user_id})"
         )
         embed.add_field(
             name=name, value=value,
         )
     embed.add_field(
         name=f"Next {settings.PER_PAGE}",
-        value=f"[Click for more]({settings.BASE_URL}/next?region_id={region_id}&offset={offset + settings.PER_PAGE}&user_id={user_id})",
+        value=f"[Click for more]({settings.BASE_URL}/next?region_id={region_id}&offset={offset + settings.PER_PAGE}&user_id={user_id}&min_profit_percent={min_profit_percent})",
     )
     embed_dict = embed.to_dict()
     return embed_dict
