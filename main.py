@@ -405,9 +405,11 @@ async def filter_contracts(region_id: int, min_profit_percent: decimal.Decimal):
     profits = {
         k: v
         for k, v in sorted(
-            all_contracts.items(), key=lambda item: item[1].profit, reverse=True
+            all_contracts.items(), key=lambda item: item[1].profit_percent, reverse=True
         )
-        if "Blueprint" not in v.most_valuable and "Container" not in v.most_valuable
+        if "Blueprint" not in v.most_valuable
+        and "Container" not in v.most_valuable
+        and v.profit_percent >= float(min_profit_percent)
     }
     return profits
 
