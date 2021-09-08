@@ -249,31 +249,6 @@ async def appraise_contract_items(
     return {"value": value, "most_valuable": most_valuable}
 
 
-async def appraise_contracts(contracts: Dict[int, Any]) -> Dict[int, Any]:
-    type_ids = set()
-    for contract in contracts.values():
-        [type_ids.add(x["type_id"]) for x in contract.get("items", [])]
-    item_prices = get_prices_for_typeids(type_ids)
-    for contract_id, contract in contracts.items():
-        for item in contract.get("items", []):
-            item["value"] = item_prices.get(item.get("type_id", 0), {}).get(
-                "price", 0.0
-            ) * item.get("quantity", 1)
-            if item["is_included"] is False:
-                item["value"] = -item["value"]
-            item["name"] = item_prices.get(item["type_id"], {}).get(
-                "name", "Unknown Item"
-            )
-        contract["value"] = sum([x["value"] for x in contract.get("items", []) if x])
-        contract["profit"] = contract["value"] - contract["price"]
-        redis_client.set(
-            f"parsed_contract_{contract_id}",
-            json.dumps(contract, default=str),
-            ex=settings.CACHE.contract,
-        )
-    return contracts
-
-
 def update_stored_tokens(
     discord_userid: str,
     access_token: str,
@@ -451,7 +426,7 @@ async def generate_embed(user_id, profits, region_id, offset: int = 0):
     for contract_id, contract in {
         k: profits[k] for k in list(profits)[offset : offset + settings.PER_PAGE]
     }.items():
-        name = f"{contract.get('most_valuable', 'Unknown Item')}" or "Unknown Item"
+        name = f"{contract.most_valuable}" or "Unknown Item"
         value = (
             f" * Price: {millify(contract['price'])}\n"
             f" * Value: {millify(contract['value'])}\n"
