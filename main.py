@@ -329,14 +329,21 @@ async def next_page(request: BaseRequest):
     region_id = request.query.get("region_id")
     offset = request.query.get("offset")
     user_id = request.query.get("user_id")
+    min_profit_percent = decimal.Decimal(request.query.get("min_profit_percent", "0.0"))
     if region_id is None or offset is None or user_id is None:
         return web.HTTPBadRequest(reason=f"One of region_id, user_id or offset missing")
     region_id = int(region_id)
     offset = int(offset)
     user_id = int(user_id)
-    profits = await filter_contracts(region_id=region_id)
+    profits = await filter_contracts(
+        region_id=region_id, min_profit_percent=min_profit_percent
+    )
     embed_dict = await generate_embed(
-        user_id=user_id, profits=profits, region_id=region_id, offset=offset
+        user_id=user_id,
+        profits=profits,
+        region_id=region_id,
+        offset=offset,
+        min_profit_percent=min_profit_percent,
     )
     user: User = bot.get_user(user_id)
     await user.send(content="", embed=discord.Embed.from_dict(embed_dict))
@@ -384,7 +391,9 @@ async def top(ctx, region_name: str = "The Forge", min_profit_percent: str = "0.
     await get_region_name_for_id(region_id)
     profits = await filter_contracts(region_id, min_profit_percent)
     await ctx.author.send(f"Logged in as {char_name}")
-    embed_dict = await generate_embed(ctx.author.id, profits, region_id)
+    embed_dict = await generate_embed(
+        ctx.author.id, profits, region_id, min_profit_percent=min_profit_percent
+    )
     await loading_msg.delete()
     await ctx.author.send(content="", embed=discord.Embed.from_dict(embed_dict))
 
@@ -414,7 +423,9 @@ async def filter_contracts(region_id: int, min_profit_percent: decimal.Decimal):
     return profits
 
 
-async def generate_embed(user_id, profits, region_id, offset: int = 0):
+async def generate_embed(
+    user_id, profits, region_id, min_profit_percent: decimal.Decimal, offset: int = 0
+):
     region_name = await get_region_name_for_id(region_id)
     embed = Embed(
         description=(
@@ -433,7 +444,7 @@ async def generate_embed(user_id, profits, region_id, offset: int = 0):
             f" * Price: {millify(contract.price)}\n"
             f" * Value: {millify(contract.value)}\n"
             f" * Profit: {millify(contract.profit)} ({contract.profit_percent:.2f}%)\n"
-            f"[Open Contract in game]({settings.BASE_URL}/contract?contract_id={contract_id}&user_id={user_id})"
+            f"[Open Contract in game]({settings.BASE_URL}/contract?contract_id={contract_id}&user_id={user_id}&min_profit_percent={min_profit_percent})"
         )
         embed.add_field(
             name=name, value=value,
