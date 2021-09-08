@@ -1,16 +1,19 @@
 import asyncio
+import decimal
 import json
 import logging
 import math
+from dataclasses import dataclass
 from datetime import timedelta, timezone, datetime
 from itertools import zip_longest
-from typing import Any, Dict, Set, Optional, List
+from typing import Any, Dict, Set, Optional, List, Union
 
 import discord
 import redis
 import requests
 from aiohttp import web
 from aiohttp.abc import BaseRequest
+from dataclasses_json import dataclass_json
 from dhooks import Embed
 from discord import Message, User
 from discord.ext import commands
@@ -75,6 +78,25 @@ esiclient = EsiClient(
 routes = web.RouteTableDef()
 
 
+@dataclass_json
+@dataclass
+class Contract:
+    price: float = 0.0
+    value: float = 0.0
+    profit: float = 0.0
+    most_valuable: str = ""
+
+    @property
+    def profit_percent(self):
+        return (self.profit / self.price) * 100.0
+
+    def update(self, kv: Dict[str, Union[str, float]]):
+        for key, value in kv.items():
+            if not hasattr(self, key):
+                raise AttributeError
+            setattr(self, key, value)
+
+
 async def process_page_contracts(contracts):
     contracts_of_interest = []
     for contract in contracts:
@@ -95,7 +117,7 @@ def grouper(iterable, n, fillvalue=None):
 
 async def get_contracts_for_region_id(
     region_id: int = 10000002, page: Optional[int] = None
-) -> Dict[int, Any]:
+) -> Dict[int, Contract]:
     max_pages = 1
     max_value = redis_client.get(f"max_page_for_{region_id}")
     if max_value is not None:
@@ -112,21 +134,15 @@ async def get_contracts_for_region_id(
     response = esiclient.request(op)
     max_pages = response.header["X-Pages"][0]
     redis_client.set(f"max_page_for_{region_id}", max_pages, ex=settings.CACHE.pages)
-    all_contracts = await process_page_contracts(response.data)
-    all_contracts = {
-        x.contract_id: {
-            "price": x.price,
-            "value": 0.0,
-            "profit": 0.0,
-            "most_valuable": 0.0,
-        }
-        for x in all_contracts
+    all_contracts_raw = await process_page_contracts(response.data)
+    all_contracts: Dict[int, Contract] = {
+        x.contract_id: Contract(price=x.price) for x in all_contracts_raw
     }
     contracts_to_load = []
     for contract_id in all_contracts.keys():
         contract = redis_client.get(f"parsed_contract_{contract_id}")
         if contract:
-            all_contracts[contract_id] = json.loads(contract)
+            all_contracts[contract_id] = Contract.from_json(contract)
         else:
             contracts_to_load.append(contract_id)
     ops = [
@@ -145,15 +161,12 @@ async def get_contracts_for_region_id(
             all_contracts[contract_id].update(
                 await appraise_contract_items(response.data, item_prices)
             )
-            all_contracts[contract_id].update(
-                {
-                    "profit": all_contracts[contract_id]["value"]
-                    - all_contracts[contract_id]["price"]
-                }
+            all_contracts[contract_id].profit = (
+                all_contracts[contract_id].value - all_contracts[contract_id].price
             )
             redis_client.set(
                 f"parsed_contract_{contract_id}",
-                json.dumps(all_contracts[contract_id], default=str),
+                all_contracts[contract_id].to_json(),
                 ex=settings.CACHE.contract,
             )
         elif response.data is None:
@@ -365,11 +378,18 @@ async def login(ctx):
 
 
 @bot.command()
-async def top(ctx, region_name: str = "The Forge"):
+async def top(ctx, region_name: str = "The Forge", min_profit_percent: str = "0.0"):
     try:
         refresh_token_for_user(ctx.author.id)
     except RuntimeError:
         await ctx.author.send("You need to login first, use `$login`")
+        return
+    try:
+        min_profit_percent = decimal.Decimal(min_profit_percent)
+    except ValueError:
+        await ctx.author.send(
+            "Use `$top {region_name} [{min_profit_percent}]`. min_profit_percent needs to be a decimal number between 0 and 100"
+        )
         return
     loading_msg: Message = await ctx.author.send(
         "Loading contracts, this may take a couple of minutes..."
@@ -387,7 +407,7 @@ async def top(ctx, region_name: str = "The Forge"):
             if region_id:
                 region_id = region_id[0]
     await get_region_name_for_id(region_id)
-    profits = await filter_contracts(region_id)
+    profits = await filter_contracts(region_id, min_profit_percent)
     await ctx.author.send(f"Logged in as {char_name}")
     embed_dict = await generate_embed(ctx.author.id, profits, region_id)
     await loading_msg.delete()
@@ -405,12 +425,12 @@ async def get_region_name_for_id(region_id: int) -> Optional[str]:
     return
 
 
-async def filter_contracts(region_id: int):
+async def filter_contracts(region_id: int, min_profit_percent: decimal.Decimal):
     all_contracts = await get_contracts_for_region_id(region_id=region_id)
     profits = {
         k: v
         for k, v in sorted(
-            all_contracts.items(), key=lambda item: item[1]["profit"], reverse=True
+            all_contracts.items(), key=lambda item: item[1].profit, reverse=True
         )
         if "Blueprint" not in v.get("most_valuable", "")
         and "Container" not in v.get("most_valuable", "")

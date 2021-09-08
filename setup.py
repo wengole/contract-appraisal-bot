@@ -11,6 +11,7 @@ install_requires = [
     "black==19.10b0",
     "loguru==0.5.1",
     "asgiref==3.2.10",
+    "dataclasses-json==0.5.5",
 ]
 
 setup(
