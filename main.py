@@ -428,9 +428,9 @@ async def generate_embed(user_id, profits, region_id, offset: int = 0):
     }.items():
         name = f"{contract.most_valuable}" or "Unknown Item"
         value = (
-            f" * Price: {millify(contract['price'])}\n"
-            f" * Value: {millify(contract['value'])}\n"
-            f" * Profit: {millify(contract['profit'])}\n"
+            f" * Price: {millify(contract.price)}\n"
+            f" * Value: {millify(contract.value)}\n"
+            f" * Profit: {millify(contract.profit)} ({contract.profit_percent:.2f}%)\n"
             f"[Open Contract in game]({settings.BASE_URL}/contract?contract_id={contract_id}&user_id={user_id})"
         )
         embed.add_field(
