@@ -428,9 +428,11 @@ async def generate_embed(
     user_id, profits, region_id, min_profit_percent: decimal.Decimal, offset: int = 0
 ):
     region_name = await get_region_name_for_id(region_id)
+    total_contracts = len(profits)
+    max_on_page = max([offset + settings.PER_PAGE, total_contracts])
     embed = Embed(
         description=(
-            f"{offset + 1} - {offset + settings.PER_PAGE} (of {len(profits)}) most profitable "
+            f"{offset + 1} - {max_on_page} (of {total_contracts}) most profitable "
             f"contracts in {region_name}"
         ),
         color=0x03FC73,
@@ -438,7 +440,7 @@ async def generate_embed(
     )
     embed.set_author(name="Contract Appraisal Bot",)
     for contract_id, contract in {
-        k: profits[k] for k in list(profits)[offset : offset + settings.PER_PAGE]
+        k: profits[k] for k in list(profits)[offset:max_on_page]
     }.items():
         name = f"{contract.most_valuable}" or "Unknown Item"
         value = (
@@ -450,10 +452,11 @@ async def generate_embed(
         embed.add_field(
             name=name, value=value,
         )
-    embed.add_field(
-        name=f"Next {settings.PER_PAGE}",
-        value=f"[Click for more]({settings.BASE_URL}/next?region_id={region_id}&offset={offset + settings.PER_PAGE}&user_id={user_id}&min_profit_percent={min_profit_percent})",
-    )
+    if max_on_page > total_contracts:
+        embed.add_field(
+            name=f"Next {settings.PER_PAGE}",
+            value=f"[Click for more]({settings.BASE_URL}/next?region_id={region_id}&offset={max_on_page}&user_id={user_id}&min_profit_percent={min_profit_percent})",
+        )
     embed_dict = embed.to_dict()
     return embed_dict
 
