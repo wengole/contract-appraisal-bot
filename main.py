@@ -88,7 +88,7 @@ class Contract:
 
     @property
     def profit_percent(self):
-        return (self.profit / self.price) * 100.0
+        return (self.profit / self.price) * 100.0 if self.price else 0.0
 
     def update(self, kv: Dict[str, Union[str, float]]):
         for key, value in kv.items():
