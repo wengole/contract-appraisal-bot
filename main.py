@@ -56,7 +56,8 @@ class InterceptHandler(logging.Handler):
         )
 
 
-logging.basicConfig(handlers=[InterceptHandler()], level=0)
+log_level = logging.getLevelName(settings.LOG_LEVEL)
+logging.basicConfig(handlers=[InterceptHandler()], level=log_level)
 
 bot = commands.Bot(command_prefix="$")
 redis_client = redis.from_url(settings.REDIS_URL)

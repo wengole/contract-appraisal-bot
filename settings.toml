@@ -8,6 +8,7 @@ ESI_USER_AGENT ="ContractAppraisalBot"
 DISCORD_BOT_TOKEN=""
 PORT=8082
 PER_PAGE=24
+LOG_LEVEL="INFO"
 
 [default.cache]
 pages=1800
