@@ -429,7 +429,7 @@ async def generate_embed(
 ):
     region_name = await get_region_name_for_id(region_id)
     total_contracts = len(profits)
-    max_on_page = max([offset + settings.PER_PAGE, total_contracts])
+    max_on_page = min([offset + settings.PER_PAGE, total_contracts])
     embed = Embed(
         description=(
             f"{offset + 1} - {max_on_page} (of {total_contracts}) most profitable "
@@ -452,7 +452,7 @@ async def generate_embed(
         embed.add_field(
             name=name, value=value,
         )
-    if max_on_page > total_contracts:
+    if max_on_page < total_contracts:
         embed.add_field(
             name=f"Next {settings.PER_PAGE}",
             value=f"[Click for more]({settings.BASE_URL}/next?region_id={region_id}&offset={max_on_page}&user_id={user_id}&min_profit_percent={min_profit_percent})",
