@@ -377,7 +377,7 @@ async def top(ctx, region_name: str = "The Forge", min_profit_percent: str = "0.
     loading_msg: Message = await ctx.author.send(
         "Loading contracts, this may take a couple of minutes..."
     )
-    char_name = esisecurity.verify()["name"]
+    char_name = esisecurity.verify(options={"verify_aud": False})["name"]
     region_id = None
     if len(region_name) >= 3:
         response = esiclient.request(
