@@ -6,7 +6,7 @@ install_requires = [
     "EsiPy==1.2.2",
     "dynaconf==2.2.3",
     "redis==3.5.3",
-    "requests==2.24.0",
+    "requests==2.31.0",
     "dhooks==1.1.3",
     "black==19.10b0",
     "loguru==0.5.1",
